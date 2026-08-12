@@ -16,7 +16,7 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.27.0'
-          channel: 'stable'
+          channel: stable
           cache: true
 
       - name: Check Flutter
@@ -27,14 +27,29 @@ jobs:
       - name: Generate Android project
         run: flutter create --platforms=android .
 
-      - name: Set Android minSdk
+      - name: Set Android minSdk to 23
         run: |
-          sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 23/' android/app/build.gradle.kts
-          grep -n "minSdk" android/app/build.gradle.kts
+          if [ -f android/app/build.gradle.kts ]; then
+            sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 23/' android/app/build.gradle.kts
+          elif [ -f android/app/build.gradle ]; then
+            sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 23/' android/app/build.gradle
+          else
+            echo "Android app Gradle file not found"
+            find android -maxdepth 3 -type f | sort
+            exit 1
+          fi
 
       - name: Get dependencies
         run: flutter pub get
 
+      - name: Build APK
+        run: flutter build apk --release -v
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
       - name: Build APK
         run: flutter build apk --release
 
