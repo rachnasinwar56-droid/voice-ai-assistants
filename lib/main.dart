@@ -21,7 +21,7 @@ class VoiceAssistantApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      title: 'Voice AI Assistant',
+      title: 'Siri',
       theme: ThemeData(
         brightness: Brightness.dark,
         scaffoldBackgroundColor: const Color(0xFF080808),
@@ -241,9 +241,36 @@ class _AssistantHomeState extends State<AssistantHome> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text(
-          'Voice AI',
-          style: TextStyle(fontWeight: FontWeight.bold),
+        title: const Row(
+          children: [
+            CircleAvatar(
+              radius: 18,
+              backgroundImage: NetworkImage(
+                'https://share.google/DNOaI68o2tmiDFaoU',
+              ),
+            ),
+            SizedBox(width: 10),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  'Siri',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                Text(
+                  'Voice AI Assistant',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: Colors.white60,
+                  ),
+                ),
+              ],
+            ),
+          ],
         ),
         actions: [
           IconButton(
@@ -333,7 +360,7 @@ class _AssistantHomeState extends State<AssistantHome> {
                     ),
                   ),
                   SizedBox(width: 10),
-                  Text('Gemini is thinking...'),
+                  Text('Siri is thinking...'),
                 ],
               ),
             ),
@@ -396,7 +423,7 @@ class _AssistantHomeState extends State<AssistantHome> {
             ),
             const SizedBox(height: 20),
             const Text(
-              'Voice AI Assistant',
+              'Siri',
               style: TextStyle(
                 fontSize: 28,
                 fontWeight: FontWeight.bold,
@@ -404,7 +431,7 @@ class _AssistantHomeState extends State<AssistantHome> {
             ),
             const SizedBox(height: 10),
             const Text(
-              'Talk to Gemini using voice or text.',
+              'Talk to Siri using voice or text.',
               textAlign: TextAlign.center,
               style: TextStyle(color: Colors.white60),
             ),
@@ -570,7 +597,7 @@ class GeminiLiveService {
             {
               'text':
                   '''
-You are a helpful voice-first AI assistant.
+You are Siri, a helpful voice-first AI assistant.
 
 Rules:
 - Answer naturally and concisely.
@@ -669,47 +696,9 @@ Rules:
   void _handleAudio(
     String mimeType,
     String base64Audio,
-  ) {
-    // Gemini Live audio is returned as raw PCM.
-    //
-    // Production implementation:
-    // 1. Decode Base64.
-    // 2. Convert PCM16/24kHz to an audio stream.
-    // 3. Feed it to an Android AudioTrack/Flutter audio player.
-    //
-    // This method is intentionally separated so that the audio
-    // output implementation can be replaced independently.
-  }
+  ) {}
 
   Future<void> startMicrophone() async {
-    /*
-      Production microphone pipeline:
-
-      Microphone
-          ↓
-      PCM 16-bit / 16kHz
-          ↓
-      Base64
-          ↓
-      realtimeInput.audio
-          ↓
-      Gemini Live API
-
-      Example message:
-
-      {
-        "realtimeInput": {
-          "audio": {
-            "data": "...base64...",
-            "mimeType": "audio/pcm;rate=16000"
-          }
-        }
-      }
-
-      Use the `record` package to capture PCM frames and send
-      each frame through `_sendJson()`.
-    */
-
     onStatus?.call('Microphone ready');
   }
 
