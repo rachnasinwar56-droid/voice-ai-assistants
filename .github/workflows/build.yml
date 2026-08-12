@@ -2,7 +2,8 @@ name: Build Android APK
 
 on:
   push:
-    branches: [ main ]
+    branches:
+      - main
 
 jobs:
   build:
@@ -25,30 +26,60 @@ jobs:
       - name: Generate Android project
         run: flutter create --platforms=android .
 
-      - name: Set Android minSdk 23
+      - name: Check Android Gradle file
         run: |
-          echo "Setting minSdk to 23..."
+          echo "Android Gradle files:"
+          find android -maxdepth 3 -type f | sort
 
+      - name: Set Android minSdk 23
+        shell: bash
+        run: |
           if [ -f "android/app/build.gradle" ]; then
+            echo "Using android/app/build.gradle"
+
             sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 23/g' android/app/build.gradle
             sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 23/g' android/app/build.gradle
+
+          elif [ -f "android/app/build.gradle.kts" ]; then
+            echo "Using android/app/build.gradle.kts"
+
+            sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 23/g' android/app/build.gradle.kts
+
           else
-            echo "ERROR: android/app/build.gradle not found"
+            echo "ERROR: No Android Gradle file found"
             find android -maxdepth 3 -type f | sort
             exit 1
           fi
 
-          echo "Checking minSdk:"
-          grep -n "minSdk" android/app/build.gradle || true
-
       - name: Clean project
-        run: flutter clean
+        run: |
+          flutter clean
+          rm -rf .dart_tool
+          rm -rf build
 
       - name: Get dependencies
         run: flutter pub get
 
+      - name: Check Gemini API Secret
+        shell: bash
+        run: |
+          if [ -z "${{ secrets.GEMINI_API_KEY }}" ]; then
+            echo "ERROR: GEMINI_API_KEY secret is missing!"
+            echo "Go to GitHub Settings > Secrets and variables > Actions"
+            echo "and add GEMINI_API_KEY."
+            exit 1
+          fi
+
+          echo "GEMINI_API_KEY secret found."
+
       - name: Build APK
-  run: flutter build apk --release --dart-define=GEMINI_API_KEY="${{ secrets.GEMINI_API_KEY }}"
+        run: |
+          flutter build apk --release \
+            --dart-define=GEMINI_API_KEY="${{ secrets.GEMINI_API_KEY }}"
+
+      - name: Check APK
+        run: |
+          ls -lh build/app/outputs/flutter-apk/app-release.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
