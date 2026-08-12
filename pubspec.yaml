@@ -22,9 +22,6 @@ dependencies:
   # Audio recording
   record: ^6.0.0
 
-  # Play PCM/WAV response audio
-  just_audio: ^0.10.0
-
   # Open Android settings
   android_intent_plus: ^5.3.0
 
