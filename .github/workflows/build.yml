@@ -24,7 +24,6 @@ jobs:
           flutter --version
           flutter doctor -v
 
-      # Generate/update the Android V2 project structure
       - name: Generate Android project
         run: flutter create --platforms=android .
 
@@ -32,7 +31,7 @@ jobs:
         run: flutter pub get
 
       - name: Build APK
-        run: flutter build apk --release
+        run: flutter build apk --release --verbose
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
