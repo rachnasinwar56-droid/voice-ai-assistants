@@ -31,9 +31,22 @@ jobs:
         run: flutter pub get
 
       - name: Build APK
-        run: flutter build apk --release --verbose
+        run: |
+          set +e
+          flutter build apk --release --verbose 2>&1 | tee build.log
+          EXIT_CODE=${PIPESTATUS[0]}
+          echo "Flutter build exit code: $EXIT_CODE"
+          exit $EXIT_CODE
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
 
       - name: Upload APK
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: release-apk
