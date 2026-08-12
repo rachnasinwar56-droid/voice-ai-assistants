@@ -2,9 +2,7 @@ name: Build Android APK
 
 on:
   push:
-    branches:
-      - main
-  workflow_dispatch:
+    branches: [ main ]
 
 jobs:
   build:
@@ -14,16 +12,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "17"
-
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: "3.27.0"
+          flutter-version: '3.27.0'
           channel: stable
           cache: true
 
@@ -31,93 +23,35 @@ jobs:
         run: flutter --version
 
       - name: Generate Android project
-        run: flutter create --platforms=android --org com.voiceai .
+        run: flutter create --platforms=android .
 
-      - name: Force Android minSdk 23
-        shell: bash
+      - name: Set Android minSdk 23
         run: |
-          set -e
+          echo "Setting minSdk to 23..."
 
-          echo "===== Android Gradle files ====="
-          find android -type f | sort
-
-          FILE="android/app/build.gradle.kts"
-
-          if [ ! -f "$FILE" ]; then
-            echo "ERROR: $FILE not found"
+          if [ -f "android/app/build.gradle" ]; then
+            sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 23/g' android/app/build.gradle
+            sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 23/g' android/app/build.gradle
+          else
+            echo "ERROR: android/app/build.gradle not found"
+            find android -maxdepth 3 -type f | sort
             exit 1
           fi
 
-          echo "===== BEFORE ====="
-          cat "$FILE"
+          echo "Checking minSdk:"
+          grep -n "minSdk" android/app/build.gradle || true
 
-          python3 - <<'PY'
-          from pathlib import Path
-
-          file = Path("android/app/build.gradle.kts")
-          text = file.read_text()
-
-          # Replace all common Flutter minSdk formats
-          text = text.replace(
-              "minSdk = flutter.minSdkVersion",
-              "minSdk = 23"
-          )
-
-          text = text.replace(
-              "minSdkVersion = flutter.minSdkVersion",
-              "minSdkVersion = 23"
-          )
-
-          text = text.replace(
-              "minSdkVersion flutter.minSdkVersion",
-              "minSdkVersion 23"
-          )
-
-          file.write_text(text)
-          PY
-
-          echo "===== AFTER ====="
-          cat "$FILE"
-
-          echo "===== MIN SDK CHECK ====="
-          grep -n "minSdk" "$FILE" || true
-
-      - name: Pin audio_session
-        run: |
-          cat >> pubspec.yaml <<'EOF'
-
-          dependency_overrides:
-            audio_session: 0.2.3
-          EOF
-
-      - name: Clean
-        run: |
-          flutter clean
-          rm -rf build
-          rm -rf .dart_tool
+      - name: Clean project
+        run: flutter clean
 
       - name: Get dependencies
         run: flutter pub get
 
-      - name: Verify dependencies
-        run: flutter pub deps
-
-      - name: Verify minSdk
-        run: |
-          echo "Checking generated Android configuration..."
-          grep -R "minSdk" android/app || true
-
-      - name: Build Release APK
+      - name: Build APK
         run: flutter build apk --release
-
-      - name: Verify APK
-        run: |
-          ls -lh build/app/outputs/flutter-apk/
-          test -f build/app/outputs/flutter-apk/app-release.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: voice-ai-assistant-release
+          name: release-apk
           path: build/app/outputs/flutter-apk/app-release.apk
-          if-no-files-found: error
