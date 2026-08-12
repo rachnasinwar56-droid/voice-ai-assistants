@@ -65,7 +65,8 @@ class _AssistantHomeState extends State<AssistantHome> {
         'GEMINI_API_KEY',
         defaultValue: '',
       ),
-      model: 'gemini-2.0-flash-live-preview',
+      model: 'gemini-2.0-flash-exp',
+,
     );
 
     _gemini.onText = (text) {
