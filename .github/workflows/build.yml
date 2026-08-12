@@ -1,0 +1,123 @@
+name: Build Android APK
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.27.0"
+          channel: stable
+          cache: true
+
+      - name: Check Flutter
+        run: flutter --version
+
+      - name: Generate Android project
+        run: flutter create --platforms=android --org com.voiceai .
+
+      - name: Force Android minSdk 23
+        shell: bash
+        run: |
+          set -e
+
+          echo "===== Android Gradle files ====="
+          find android -type f | sort
+
+          FILE="android/app/build.gradle.kts"
+
+          if [ ! -f "$FILE" ]; then
+            echo "ERROR: $FILE not found"
+            exit 1
+          fi
+
+          echo "===== BEFORE ====="
+          cat "$FILE"
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          file = Path("android/app/build.gradle.kts")
+          text = file.read_text()
+
+          # Replace all common Flutter minSdk formats
+          text = text.replace(
+              "minSdk = flutter.minSdkVersion",
+              "minSdk = 23"
+          )
+
+          text = text.replace(
+              "minSdkVersion = flutter.minSdkVersion",
+              "minSdkVersion = 23"
+          )
+
+          text = text.replace(
+              "minSdkVersion flutter.minSdkVersion",
+              "minSdkVersion 23"
+          )
+
+          file.write_text(text)
+          PY
+
+          echo "===== AFTER ====="
+          cat "$FILE"
+
+          echo "===== MIN SDK CHECK ====="
+          grep -n "minSdk" "$FILE" || true
+
+      - name: Pin audio_session
+        run: |
+          cat >> pubspec.yaml <<'EOF'
+
+          dependency_overrides:
+            audio_session: 0.2.3
+          EOF
+
+      - name: Clean
+        run: |
+          flutter clean
+          rm -rf build
+          rm -rf .dart_tool
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Verify dependencies
+        run: flutter pub deps
+
+      - name: Verify minSdk
+        run: |
+          echo "Checking generated Android configuration..."
+          grep -R "minSdk" android/app || true
+
+      - name: Build Release APK
+        run: flutter build apk --release
+
+      - name: Verify APK
+        run: |
+          ls -lh build/app/outputs/flutter-apk/
+          test -f build/app/outputs/flutter-apk/app-release.apk
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: voice-ai-assistant-release
+          path: build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
