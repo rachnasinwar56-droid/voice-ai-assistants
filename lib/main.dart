@@ -66,7 +66,6 @@ class _AssistantHomeState extends State<AssistantHome> {
         defaultValue: '',
       ),
       model: 'gemini-2.0-flash-exp',
-,
     );
 
     _gemini.onText = (text) {
