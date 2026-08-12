@@ -27,14 +27,23 @@ jobs:
       - name: Generate Android project
         run: flutter create --platforms=android .
 
+      - name: Set Android minSdk
+        run: |
+          sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 23/' android/app/build.gradle.kts
+          grep -n "minSdk" android/app/build.gradle.kts
+
       - name: Get dependencies
         run: flutter pub get
 
       - name: Build APK
-        run: |
-          set +e
-          flutter build apk --release --verbose 2>&1 | tee build.log
-          EXIT_CODE=${PIPESTATUS[0]}
+        run: flutter build apk --release
+
+      - name: Upload APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-apk
+          path: build/app/outputs/flutter-apk/app-release.apk          EXIT_CODE=${PIPESTATUS[0]}
           echo "Flutter build exit code: $EXIT_CODE"
           exit $EXIT_CODE
 
