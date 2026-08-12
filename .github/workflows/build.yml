@@ -25,21 +25,27 @@ jobs:
       - name: Generate Android project
         run: flutter create --platforms=android .
 
-      - name: Set Android minSdk
+      - name: Find Android Gradle file
         run: |
-          FILE=$(find android/app -maxdepth 1 -type f \( -name "build.gradle" -o -name "build.gradle.kts" \) | head -n 1)
+          echo "Android files:"
+          find android -maxdepth 3 -type f | sort
 
-          echo "Using: $FILE"
-
-          if [[ "$FILE" == *.kts ]]; then
-            sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 23/g' "$FILE"
+      - name: Set Android minSdk 23
+        shell: bash
+        run: |
+          if [ -f "android/app/build.gradle.kts" ]; then
+            echo "Using Kotlin Gradle file"
+            sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 23/g' android/app/build.gradle.kts
+          elif [ -f "android/app/build.gradle" ]; then
+            echo "Using Groovy Gradle file"
+            sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 23/g' android/app/build.gradle
           else
-            sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 23/g' "$FILE"
+            echo "ERROR: Android Gradle file not found"
+            find android -maxdepth 3 -type f | sort
+            exit 1
           fi
 
-          cat "$FILE"
-
-      - name: Clean old build files
+      - name: Clean project
         run: |
           flutter clean
           rm -rf build
@@ -47,9 +53,6 @@ jobs:
 
       - name: Get dependencies
         run: flutter pub get
-
-      - name: Show dependencies
-        run: flutter pub deps
 
       - name: Build APK
         run: flutter build apk --release
