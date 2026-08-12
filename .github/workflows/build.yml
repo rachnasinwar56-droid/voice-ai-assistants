@@ -20,41 +20,41 @@ jobs:
           cache: true
 
       - name: Check Flutter
-        run: |
-          flutter --version
-          flutter doctor -v
+        run: flutter --version
 
       - name: Generate Android project
         run: flutter create --platforms=android .
 
-      - name: Set Android minSdk to 23
+      - name: Set Android minSdk
         run: |
-          if [ -f android/app/build.gradle.kts ]; then
-            sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 23/' android/app/build.gradle.kts
-          elif [ -f android/app/build.gradle ]; then
-            sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 23/' android/app/build.gradle
+          FILE=$(find android/app -maxdepth 1 -type f \( -name "build.gradle" -o -name "build.gradle.kts" \) | head -n 1)
+
+          echo "Using: $FILE"
+
+          if [[ "$FILE" == *.kts ]]; then
+            sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 23/g' "$FILE"
           else
-            echo "Android app Gradle file not found"
-            find android -maxdepth 3 -type f | sort
-            exit 1
+            sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 23/g' "$FILE"
           fi
+
+          cat "$FILE"
+
+      - name: Clean old build files
+        run: |
+          flutter clean
+          rm -rf build
+          rm -rf .dart_tool
 
       - name: Get dependencies
         run: flutter pub get
 
-      - name: Build APK
-        run: flutter build apk --release -v
+      - name: Show dependencies
+        run: flutter pub deps
 
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-apk
-          path: build/app/outputs/flutter-apk/app-release.apk
       - name: Build APK
         run: flutter build apk --release
 
       - name: Upload APK
-        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: release-apk
