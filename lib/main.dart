@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -40,7 +41,150 @@ class SiriApp extends StatelessWidget {
 }
 
 // ============================================================
-// HOME
+// MESSAGE MODEL
+// ============================================================
+
+enum MessageRole {
+  user,
+  assistant,
+}
+
+class ChatMessage {
+  final MessageRole role;
+  final String text;
+
+  const ChatMessage({
+    required this.role,
+    required this.text,
+  });
+}
+
+// ============================================================
+// GEMINI SERVICE
+// ============================================================
+
+class GeminiApiService {
+  final String apiKey;
+
+  GeminiApiService({
+    required this.apiKey,
+  });
+
+  static const String model = 'gemini-3.1-flash-lite';
+
+  Future<String> sendMessage(String prompt) async {
+    if (apiKey.trim().isEmpty) {
+      throw Exception('Gemini API key is missing.');
+    }
+
+    final uri = Uri.parse(
+      'https://generativelanguage.googleapis.com/v1beta/'
+      'models/$model:generateContent?key=$apiKey',
+    );
+
+    final body = {
+      'system_instruction': {
+        'parts': [
+          {
+            'text': '''
+You are Siri, a helpful personal AI assistant.
+
+Rules:
+- Your name is Siri.
+- Understand Hindi, English and Hinglish.
+- Reply in the same language as the user.
+- Keep normal answers concise.
+- Be friendly and conversational.
+- If the user asks a technical question, explain clearly.
+- Never claim that you performed an action on the phone unless
+  the application actually performed that action.
+'''
+          }
+        ]
+      },
+      'contents': [
+        {
+          'role': 'user',
+          'parts': [
+            {
+              'text': prompt,
+            }
+          ]
+        }
+      ],
+      'generationConfig': {
+        'temperature': 0.7,
+        'maxOutputTokens': 1024,
+      },
+    };
+
+    final response = await http.post(
+      uri,
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: jsonEncode(body),
+    );
+
+    if (response.statusCode != 200) {
+      String errorMessage =
+          'Gemini API error: HTTP ${response.statusCode}';
+
+      try {
+        final data = jsonDecode(response.body);
+
+        final message = data['error']?['message'];
+
+        if (message != null) {
+          errorMessage = message.toString();
+        }
+      } catch (_) {}
+
+      throw Exception(errorMessage);
+    }
+
+    final data = jsonDecode(response.body);
+
+    final candidates = data['candidates'];
+
+    if (candidates is! List || candidates.isEmpty) {
+      throw Exception('Gemini returned no response.');
+    }
+
+    final content = candidates[0]['content'];
+
+    if (content == null) {
+      throw Exception('Gemini response content is empty.');
+    }
+
+    final parts = content['parts'];
+
+    if (parts is! List || parts.isEmpty) {
+      throw Exception('Gemini response parts are empty.');
+    }
+
+    final buffer = StringBuffer();
+
+    for (final part in parts) {
+      final text = part['text'];
+
+      if (text is String) {
+        buffer.write(text);
+      }
+    }
+
+    final result = buffer.toString().trim();
+
+    if (result.isEmpty) {
+      throw Exception('Gemini returned an empty response.');
+    }
+
+    return result;
+  }
+}
+
+// ============================================================
+// SIRI HOME
 // ============================================================
 
 class SiriHome extends StatefulWidget {
@@ -51,7 +195,28 @@ class SiriHome extends StatefulWidget {
 }
 
 class _SiriHomeState extends State<SiriHome> {
+  // ----------------------------------------------------------
+  // API KEY
+  // ----------------------------------------------------------
+
+  static const String geminiApiKey = String.fromEnvironment(
+    'GEMINI_API_KEY',
+    defaultValue: '',
+  );
+
+  // ----------------------------------------------------------
+  // SERVICES
+  // ----------------------------------------------------------
+
   late final GeminiApiService _gemini;
+
+  final stt.SpeechToText _speech = stt.SpeechToText();
+
+  final FlutterTts _tts = FlutterTts();
+
+  // ----------------------------------------------------------
+  // CONTROLLERS
+  // ----------------------------------------------------------
 
   final TextEditingController _textController =
       TextEditingController();
@@ -59,33 +224,27 @@ class _SiriHomeState extends State<SiriHome> {
   final ScrollController _scrollController =
       ScrollController();
 
-  final FlutterTts _tts = FlutterTts();
-
-  final stt.SpeechToText _speech =
-      stt.SpeechToText();
-
-  bool _thinking = false;
-  bool _isListening = false;
-  bool _speechAvailable = false;
-  bool _ttsEnabled = true;
-
-  String _status = 'Ready';
+  // ----------------------------------------------------------
+  // STATE
+  // ----------------------------------------------------------
 
   final List<ChatMessage> _messages = [];
 
-  // ==========================================================
-  // GEMINI API KEY
-  // ==========================================================
+  bool _thinking = false;
 
-  static const String geminiApiKey =
-      String.fromEnvironment(
-    'GEMINI_API_KEY',
-    defaultValue: '',
-  );
+  bool _speechAvailable = false;
 
-  // ==========================================================
+  bool _isListening = false;
+
+  bool _isSpeaking = false;
+
+  String _statusText = 'Ready';
+
+  String _recognizedText = '';
+
+  // ----------------------------------------------------------
   // SIRI IMAGE
-  // ==========================================================
+  // ----------------------------------------------------------
 
   static const String siriPhotoUrl =
       'https://upload.wikimedia.org/wikipedia/commons/thumb/d/d3/Siri_logo.svg/512px-Siri_logo.svg.png';
@@ -113,17 +272,50 @@ class _SiriHomeState extends State<SiriHome> {
   Future<void> _initializeTts() async {
     try {
       await _tts.setLanguage('en-US');
+
       await _tts.setSpeechRate(0.48);
-      await _tts.setSpeechVolume(1.0);
+
+      await _tts.setVolume(1.0);
+
       await _tts.setPitch(1.0);
 
       await _tts.awaitSpeakCompletion(true);
 
-      if (Platform.isAndroid) {
-        try {
-          await _tts.setQueueMode(1);
-        } catch (_) {}
-      }
+      _tts.setStartHandler(() {
+        if (!mounted) return;
+
+        setState(() {
+          _isSpeaking = true;
+          _statusText = 'Speaking...';
+        });
+      });
+
+      _tts.setCompletionHandler(() {
+        if (!mounted) return;
+
+        setState(() {
+          _isSpeaking = false;
+          _statusText = 'Ready';
+        });
+      });
+
+      _tts.setCancelHandler(() {
+        if (!mounted) return;
+
+        setState(() {
+          _isSpeaking = false;
+          _statusText = 'Ready';
+        });
+      });
+
+      _tts.setErrorHandler((message) {
+        if (!mounted) return;
+
+        setState(() {
+          _isSpeaking = false;
+          _statusText = 'TTS Error';
+        });
+      });
     } catch (e) {
       debugPrint('TTS initialization error: $e');
     }
@@ -141,12 +333,19 @@ class _SiriHomeState extends State<SiriHome> {
 
           if (!mounted) return;
 
+          if (status == 'listening') {
+            setState(() {
+              _isListening = true;
+              _statusText = 'Listening...';
+            });
+          }
+
           if (status == 'notListening') {
             setState(() {
               _isListening = false;
 
-              if (!_thinking) {
-                _status = 'Ready';
+              if (!_thinking && !_isSpeaking) {
+                _statusText = 'Ready';
               }
             });
           }
@@ -158,7 +357,7 @@ class _SiriHomeState extends State<SiriHome> {
 
           setState(() {
             _isListening = false;
-            _status = 'Voice error';
+            _statusText = 'Voice error';
           });
         },
       );
@@ -174,79 +373,13 @@ class _SiriHomeState extends State<SiriHome> {
   }
 
   // ==========================================================
-  // DISPOSE
-  // ==========================================================
-
-  @override
-  void dispose() {
-    _textController.dispose();
-    _scrollController.dispose();
-
-    _tts.stop();
-    _speech.stop();
-
-    super.dispose();
-  }
-
-  // ==========================================================
-  // SNACKBAR
-  // ==========================================================
-
-  void _showMessage(String message) {
-    if (!mounted) return;
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        behavior: SnackBarBehavior.floating,
-      ),
-    );
-  }
-
-  // ==========================================================
-  // SCROLL
-  // ==========================================================
-
-  void _scrollToBottom() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!_scrollController.hasClients) return;
-
-      _scrollController.animateTo(
-        _scrollController.position.maxScrollExtent,
-        duration: const Duration(milliseconds: 250),
-        curve: Curves.easeOut,
-      );
-    });
-  }
-
-  // ==========================================================
-  // MICROPHONE PERMISSION
-  // ==========================================================
-
-  Future<bool> _requestMicrophonePermission() async {
-    final status =
-        await Permission.microphone.request();
-
-    if (!status.isGranted) {
-      _showMessage(
-        'Microphone permission is required.',
-      );
-
-      return false;
-    }
-
-    return true;
-  }
-
-  // ==========================================================
-  // START VOICE INPUT
+  // VOICE INPUT
   // ==========================================================
 
   Future<void> _startListening() async {
-    final permission =
-        await _requestMicrophonePermission();
+    if (_thinking) return;
 
-    if (!permission) return;
+    await _stopSpeaking();
 
     if (!_speechAvailable) {
       await _initializeSpeech();
@@ -254,37 +387,37 @@ class _SiriHomeState extends State<SiriHome> {
 
     if (!_speechAvailable) {
       _showMessage(
-        'Speech recognition is not available on this device.',
+        'Voice recognition is not available on this device.',
       );
       return;
     }
 
-    if (_isListening) {
-      await _stopListening();
-      return;
-    }
-
     try {
-      await _tts.stop();
-
       setState(() {
         _isListening = true;
-        _status = 'Listening...';
+        _statusText = 'Listening...';
+        _recognizedText = '';
       });
 
       await _speech.listen(
+        localeId: 'en_US',
+        listenMode: stt.ListenMode.confirmation,
+        partialResults: true,
+        cancelOnError: true,
+        listenFor: const Duration(seconds: 30),
+        pauseFor: const Duration(seconds: 3),
         onResult: (result) {
           if (!mounted) return;
 
           setState(() {
-            _textController.text =
-                result.recognizedWords;
+            _recognizedText = result.recognizedWords;
+
+            _textController.text = result.recognizedWords;
 
             _textController.selection =
                 TextSelection.fromPosition(
               TextPosition(
-                offset:
-                    _textController.text.length,
+                offset: _textController.text.length,
               ),
             );
           });
@@ -292,41 +425,25 @@ class _SiriHomeState extends State<SiriHome> {
           if (result.finalResult) {
             _stopListening();
 
-            final text =
-                result.recognizedWords.trim();
+            final text = result.recognizedWords.trim();
 
             if (text.isNotEmpty) {
-              _sendText(text);
+              _sendMessage(text);
             }
           }
         },
-        listenFor: const Duration(
-          seconds: 30,
-        ),
-        pauseFor: const Duration(
-          seconds: 4,
-        ),
-        partialResults: true,
-        listenMode: stt.ListenMode.confirmation,
-        cancelOnError: true,
       );
     } catch (e) {
+      debugPrint('Start listening error: $e');
+
       if (!mounted) return;
 
       setState(() {
         _isListening = false;
-        _status = 'Ready';
+        _statusText = 'Ready';
       });
-
-      _showMessage(
-        'Voice input error: $e',
-      );
     }
   }
-
-  // ==========================================================
-  // STOP LISTENING
-  // ==========================================================
 
   Future<void> _stopListening() async {
     try {
@@ -338,36 +455,73 @@ class _SiriHomeState extends State<SiriHome> {
     setState(() {
       _isListening = false;
 
-      if (!_thinking) {
-        _status = 'Ready';
+      if (!_thinking && !_isSpeaking) {
+        _statusText = 'Ready';
       }
     });
   }
 
   // ==========================================================
-  // SEND TEXT
+  // TTS
   // ==========================================================
 
-  Future<void> _sendText(
-    [String? providedText]
-  ) async {
-    final text =
-        (providedText ?? _textController.text).trim();
+  Future<void> _speak(String text) async {
+    if (text.trim().isEmpty) return;
+
+    try {
+      await _tts.stop();
+
+      // Hindi/Hinglish friendly fallback.
+      // Android TTS engine decides the actual voice.
+      final hindiAvailable =
+          await _tts.isLanguageAvailable('hi-IN');
+
+      if (hindiAvailable == true) {
+        await _tts.setLanguage('hi-IN');
+      } else {
+        await _tts.setLanguage('en-US');
+      }
+
+      await _tts.speak(text);
+    } catch (e) {
+      debugPrint('TTS speak error: $e');
+    }
+  }
+
+  Future<void> _stopSpeaking() async {
+    try {
+      await _tts.stop();
+    } catch (_) {}
+
+    if (!mounted) return;
+
+    setState(() {
+      _isSpeaking = false;
+
+      if (!_thinking && !_isListening) {
+        _statusText = 'Ready';
+      }
+    });
+  }
+
+  // ==========================================================
+  // SEND MESSAGE
+  // ==========================================================
+
+  Future<void> _sendMessage(String value) async {
+    final text = value.trim();
 
     if (text.isEmpty) return;
 
     if (geminiApiKey.isEmpty) {
       _showMessage(
-        'GEMINI_API_KEY missing.',
+        'GEMINI_API_KEY missing.\n'
+        'GitHub Actions Secrets में GEMINI_API_KEY add करो.',
       );
       return;
     }
 
-    await _tts.stop();
-
-    if (_isListening) {
-      await _stopListening();
-    }
+    await _stopListening();
 
     setState(() {
       _messages.add(
@@ -378,7 +532,7 @@ class _SiriHomeState extends State<SiriHome> {
       );
 
       _thinking = true;
-      _status = 'Thinking...';
+      _statusText = 'Thinking...';
     });
 
     _textController.clear();
@@ -386,8 +540,7 @@ class _SiriHomeState extends State<SiriHome> {
     _scrollToBottom();
 
     try {
-      final reply =
-          await _gemini.sendMessage(text);
+      final reply = await _gemini.sendMessage(text);
 
       if (!mounted) return;
 
@@ -401,64 +554,79 @@ class _SiriHomeState extends State<SiriHome> {
           ),
         );
 
-        _status = 'Ready';
+        _statusText = 'Ready';
       });
 
       _scrollToBottom();
 
-      // Siri बोलेगी
-      if (_ttsEnabled) {
-        await _speak(reply);
-      }
+      // Siri voice reply
+      await _speak(reply);
     } catch (e) {
       if (!mounted) return;
 
       setState(() {
         _thinking = false;
-        _status = 'Error';
+        _statusText = 'Error';
       });
 
       _showMessage(
-        'Gemini Error: $e',
+        e.toString().replaceFirst('Exception: ', ''),
+      );
+    }
+  }
+
+  Future<void> _sendText() async {
+    await _sendMessage(_textController.text);
+  }
+
+  // ==========================================================
+  // MICROPHONE PERMISSION
+  // ==========================================================
+
+  Future<void> _requestMicrophone() async {
+    final status = await Permission.microphone.request();
+
+    if (status.isGranted) {
+      await _initializeSpeech();
+
+      _showMessage('Microphone permission granted.');
+    } else {
+      _showMessage(
+        'Microphone permission is required for voice input.',
       );
     }
   }
 
   // ==========================================================
-  // TTS SPEAK
+  // PHONE PERMISSION
   // ==========================================================
 
-  Future<void> _speak(String text) async {
-    if (text.trim().isEmpty) return;
+  Future<void> _requestPhonePermission() async {
+    final status = await Permission.phone.request();
 
-    try {
-      await _tts.stop();
-
-      // Hindi / Hinglish के लिए Hindi voice try करें
-      try {
-        await _tts.setLanguage('hi-IN');
-      } catch (_) {
-        await _tts.setLanguage('en-US');
-      }
-
-      await _tts.speak(text);
-    } catch (e) {
-      debugPrint('TTS error: $e');
+    if (status.isGranted) {
+      _showMessage('Phone permission granted.');
+    } else {
+      _showMessage('Phone permission was not granted.');
     }
   }
 
   // ==========================================================
-  // TTS STOP
+  // SMS PERMISSION
   // ==========================================================
 
-  Future<void> _stopSpeaking() async {
-    try {
-      await _tts.stop();
-    } catch (_) {}
+  Future<void> _requestSmsPermission() async {
+    final status = await Permission.sms.request();
+
+    if (status.isGranted) {
+      _showMessage('SMS permission granted.');
+    } else {
+      _showMessage('SMS permission was not granted.');
+    }
   }
 
   // ==========================================================
-  // OPEN OVERLAY SETTINGS
+  // OVERLAY SETTINGS
   // ==========================================================
 
   Future<void> _openOverlaySettings() async {
@@ -494,9 +662,55 @@ class _SiriHomeState extends State<SiriHome> {
       await intent.launch();
     } catch (e) {
       _showMessage(
-        'Unable to open Notification Settings.',
+        'Unable to open Notification Access Settings.',
       );
     }
+  }
+
+  // ==========================================================
+  // SCROLL
+  // ==========================================================
+
+  void _scrollToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_scrollController.hasClients) return;
+
+      _scrollController.animateTo(
+        _scrollController.position.maxScrollExtent,
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeOut,
+      );
+    });
+  }
+
+  // ==========================================================
+  // MESSAGE
+  // ==========================================================
+
+  void _showMessage(String message) {
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  // ==========================================================
+  // DISPOSE
+  // ==========================================================
+
+  @override
+  void dispose() {
+    _speech.stop();
+    _tts.stop();
+
+    _textController.dispose();
+    _scrollController.dispose();
+
+    super.dispose();
   }
 
   // ==========================================================
@@ -541,29 +755,22 @@ class _SiriHomeState extends State<SiriHome> {
           IconButton(
             tooltip: 'Stop Siri',
             onPressed: _stopSpeaking,
-            icon: const Icon(
-              Icons.volume_off,
-            ),
+            icon: const Icon(Icons.volume_off),
           ),
 
           PopupMenuButton<String>(
             onSelected: (value) async {
               switch (value) {
                 case 'mic':
-                  await _requestMicrophonePermission();
+                  await _requestMicrophone();
                   break;
 
-                case 'tts':
-                  setState(() {
-                    _ttsEnabled = !_ttsEnabled;
-                  });
+                case 'phone':
+                  await _requestPhonePermission();
+                  break;
 
-                  _showMessage(
-                    _ttsEnabled
-                        ? 'Siri voice enabled'
-                        : 'Siri voice disabled',
-                  );
-
+                case 'sms':
+                  await _requestSmsPermission();
                   break;
 
                 case 'overlay':
@@ -575,36 +782,38 @@ class _SiriHomeState extends State<SiriHome> {
                   break;
               }
             },
-            itemBuilder: (_) => [
-              const PopupMenuItem(
+            itemBuilder: (_) => const [
+              PopupMenuItem(
                 value: 'mic',
                 child: Row(
                   children: [
                     Icon(Icons.mic),
                     SizedBox(width: 10),
-                    Text(
-                      'Microphone Permission',
-                    ),
+                    Text('Microphone Permission'),
                   ],
                 ),
               ),
-
               PopupMenuItem(
-                value: 'tts',
+                value: 'phone',
                 child: Row(
                   children: [
-                    const Icon(Icons.record_voice_over),
-                    const SizedBox(width: 10),
-                    Text(
-                      _ttsEnabled
-                          ? 'Disable Siri Voice'
-                          : 'Enable Siri Voice',
-                    ),
+                    Icon(Icons.phone),
+                    SizedBox(width: 10),
+                    Text('Phone Permission'),
                   ],
                 ),
               ),
-
-              const PopupMenuItem(
+              PopupMenuItem(
+                value: 'sms',
+                child: Row(
+                  children: [
+                    Icon(Icons.sms),
+                    SizedBox(width: 10),
+                    Text('SMS Permission'),
+                  ],
+                ),
+              ),
+              PopupMenuItem(
                 value: 'overlay',
                 child: Row(
                   children: [
@@ -614,8 +823,7 @@ class _SiriHomeState extends State<SiriHome> {
                   ],
                 ),
               ),
-
-              const PopupMenuItem(
+              PopupMenuItem(
                 value: 'notifications',
                 child: Row(
                   children: [
@@ -626,204 +834,4 @@ class _SiriHomeState extends State<SiriHome> {
                 ),
               ),
             ],
-          ),
-        ],
-      ),
-
-      body: Column(
-        children: [
-          _buildStatus(),
-
-          Expanded(
-            child: _messages.isEmpty
-                ? _buildEmptyState()
-                : ListView.builder(
-                    controller: _scrollController,
-                    padding: const EdgeInsets.all(16),
-                    itemCount: _messages.length,
-                    itemBuilder: (_, index) {
-                      return _buildMessage(
-                        _messages[index],
-                      );
-                    },
-                  ),
-          ),
-
-          if (_thinking)
-            const Padding(
-              padding: EdgeInsets.symmetric(
-                horizontal: 18,
-                vertical: 8,
-              ),
-              child: Row(
-                children: [
-                  SizedBox(
-                    width: 16,
-                    height: 16,
-                    child:
-                        CircularProgressIndicator(
-                      strokeWidth: 2,
-                    ),
-                  ),
-                  SizedBox(width: 10),
-                  Text(
-                    'Siri is thinking...',
-                  ),
-                ],
-              ),
-            ),
-
-          _buildInput(),
-        ],
-      ),
-    );
-  }
-
-  // ==========================================================
-  // STATUS
-  // ==========================================================
-
-  Widget _buildStatus() {
-    final hasKey =
-        geminiApiKey.isNotEmpty;
-
-    final color = hasKey
-        ? Colors.green
-        : Colors.red;
-
-    return Container(
-      margin: const EdgeInsets.all(12),
-      padding: const EdgeInsets.symmetric(
-        horizontal: 16,
-        vertical: 12,
-      ),
-      decoration: BoxDecoration(
-        color: color.withOpacity(.12),
-        borderRadius:
-            BorderRadius.circular(18),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 10,
-            height: 10,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: color,
-            ),
-          ),
-
-          const SizedBox(width: 10),
-
-          Expanded(
-            child: Text(
-              hasKey
-                  ? _status
-                  : 'API Key Missing',
-            ),
-          ),
-
-          if (_isListening)
-            const Icon(
-              Icons.mic,
-              color: Colors.redAccent,
-              size: 20,
-            ),
-        ],
-      ),
-    );
-  }
-
-  // ==========================================================
-  // EMPTY STATE
-  // ==========================================================
-
-  Widget _buildEmptyState() {
-    return Center(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.all(30),
-        child: Column(
-          mainAxisAlignment:
-              MainAxisAlignment.center,
-          children: [
-            Container(
-              width: 120,
-              height: 120,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                boxShadow: [
-                  BoxShadow(
-                    color:
-                        Colors.deepPurple.withOpacity(.35),
-                    blurRadius: 35,
-                    spreadRadius: 5,
-                  ),
-                ],
-              ),
-              child: ClipOval(
-                child: Image.network(
-                  siriPhotoUrl,
-                  fit: BoxFit.cover,
-                  errorBuilder: (_, __, ___) {
-                    return Container(
-                      color: Colors.deepPurple,
-                      child: const Icon(
-                        Icons.auto_awesome,
-                        size: 60,
-                        color: Colors.white,
-                      ),
-                    );
-                  },
-                ),
-              ),
-            ),
-
-            const SizedBox(height: 25),
-
-            const Text(
-              'Siri',
-              style: TextStyle(
-                fontSize: 32,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-
-            const SizedBox(height: 10),
-
-            const Text(
-              'Your AI Voice Assistant',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 18,
-                color: Colors.white70,
-              ),
-            ),
-
-            const SizedBox(height: 8),
-
-            const Text(
-              'Tap the microphone and talk to Siri.',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                color: Colors.white54,
-              ),
-            ),
-
-            const SizedBox(height: 25),
-
-            FloatingActionButton.large(
-              heroTag: 'emptyMic',
-              onPressed: _startListening,
-              child: Icon(
-                _isListening
-                    ? Icons.stop
-                    : Icons.mic,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  // =====================================================
+     
