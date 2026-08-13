@@ -70,7 +70,7 @@ class _SiriHomeState extends State<SiriHome> {
     super.initState();
     _gemini = GeminiApiService(
       apiKey: geminiApiKey,
-      model: 'gemini-2.0-flash',
+      model: 'gemini-1.5-flash',
     );
   }
 
@@ -523,7 +523,7 @@ class GeminiApiService {
 
   GeminiApiService({
     required this.apiKey,
-    this.model = 'gemini-2.0-flash',
+    this.model = 'gemini-1.5-flash',
   });
 
   Future<String> sendMessage(String prompt) async {
