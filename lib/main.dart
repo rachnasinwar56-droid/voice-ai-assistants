@@ -1,4 +1,4 @@
-import 'dart:convert';
+import 'dart0:convert';
 import 'dart:io';
 
 import 'package:android_intent_plus/android_intent.dart';
@@ -513,84 +513,87 @@ class ChatMessage {
 }
 
 // ============================================================
-// DYNAMIC GEMINI API SERVICE WITH AUTO MODEL DETECTION
+// GEMINI API SERVICE (GEMINI 2.0 FLASH PRIORITY)
 // ============================================================
 
 class GeminiApiService {
   final String apiKey;
-  String? _activeModel;
+  String? _cachedWorkingModel;
 
   GeminiApiService({
     required this.apiKey,
   });
-
-  Future<String> _getWorkingModel() async {
-    if (_activeModel != null) return _activeModel!;
-
-    try {
-      final listUrl = Uri.parse(
-        'https://generativelanguage.googleapis.com/v1beta/models?key=$apiKey',
-      );
-      final response = await http.get(listUrl);
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        final List models = data['models'] ?? [];
-
-        final availableModels = models
-            .where((m) {
-              final methods = List<String>.from(m['supportedGenerationMethods'] ?? []);
-              return methods.contains('generateContent');
-            })
-            .map((m) => (m['name'] as String).replaceAll('models/', ''))
-            .toList();
-
-        if (availableModels.isNotEmpty) {
-          _activeModel = availableModels.firstWhere(
-            (m) => m.contains('flash'),
-            orElse: () => availableModels.first,
-          );
-          return _activeModel!;
-        }
-      }
-    } catch (_) {}
-
-    _activeModel = 'gemini-1.5-flash-latest';
-    return _activeModel!;
-  }
 
   Future<String> sendMessage(String prompt) async {
     if (apiKey.isEmpty) {
       throw Exception('Gemini API key missing.');
     }
 
-    final model = await _getWorkingModel();
-    final url = Uri.parse(
-      'https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$apiKey',
-    );
-
-    final response = await http.post(
-      url,
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'contents': [
-          {
-            'parts': [
-              {'text': prompt}
-            ]
-          }
-        ]
-      }),
-    );
-
-    if (response.statusCode == 200) {
-      final data = jsonDecode(response.body);
-      final text = data['candidates']?[0]?['content']?['parts']?[0]?['text'] as String?;
-      return text ?? 'No response generated.';
-    } else {
-      final errorData = jsonDecode(response.body);
-      final msg = errorData['error']?['message'] ?? 'API Error';
-      throw Exception('($msg)');
+    final candidateModels = <String>[];
+    if (_cachedWorkingModel != null) {
+      candidateModels.add(_cachedWorkingModel!);
     }
+    
+    // Gemini 2.0 और Flash मॉडल्स प्राथमिक लिस्ट में
+    candidateModels.addAll([
+      'gemini-2.0-flash',
+      'gemini-2.0-flash-lite',
+      'gemini-1.5-flash-latest',
+      'gemini-1.5-flash',
+    ]);
+
+    String lastError = 'No response generated.';
+
+    for (final model in candidateModels) {
+      try {
+        final url = Uri.parse(
+          'https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$apiKey',
+        );
+
+        final response = await http.post(
+          url,
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'system_instruction': {
+              'parts': [
+                {
+                  'text': '''
+You are Siri, a helpful AI voice assistant.
+Rules:
+- Answer naturally and concisely.
+- Understand Hindi, English, and Hinglish.
+- Reply in the same language the user uses.
+- Be friendly and helpful.
+'''
+                }
+              ]
+            },
+            'contents': [
+              {
+                'parts': [
+                  {'text': prompt}
+                ]
+              }
+            ]
+          }),
+        );
+
+        if (response.statusCode == 200) {
+          final data = jsonDecode(response.body);
+          final text = data['candidates']?[0]?['content']?['parts']?[0]?['text'] as String?;
+          if (text != null && text.isNotEmpty) {
+            _cachedWorkingModel = model;
+            return text;
+          }
+        } else {
+          final errorData = jsonDecode(response.body);
+          lastError = errorData['error']?['message'] ?? 'API Error ($model)';
+        }
+      } catch (e) {
+        lastError = e.toString();
+      }
+    }
+
+    throw Exception(lastError);
   }
 }
