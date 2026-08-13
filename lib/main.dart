@@ -70,7 +70,6 @@ class _SiriHomeState extends State<SiriHome> {
     super.initState();
     _gemini = GeminiApiService(
       apiKey: geminiApiKey,
-      model: 'gemini-1.5-flash',
     );
   }
 
@@ -514,16 +513,14 @@ class ChatMessage {
 }
 
 // ============================================================
-// GEMINI HTTP REST API SERVICE
+// GEMINI HTTP REST API SERVICE WITH FALLBACKS
 // ============================================================
 
 class GeminiApiService {
   final String apiKey;
-  final String model;
 
   GeminiApiService({
     required this.apiKey,
-    this.model = 'gemini-1.5-flash',
   });
 
   Future<String> sendMessage(String prompt) async {
@@ -531,18 +528,29 @@ class GeminiApiService {
       throw Exception('Gemini API key missing.');
     }
 
-    final url = Uri.parse(
-      'https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$apiKey',
-    );
+    final models = [
+      'gemini-2.5-flash',
+      'gemini-2.0-flash',
+      'gemini-1.5-flash',
+      'gemini-1.5-pro',
+    ];
 
-    final response = await http.post(
-      url,
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'system_instruction': {
-          'parts': [
-            {
-              'text': '''
+    String lastError = '';
+
+    for (final model in models) {
+      try {
+        final url = Uri.parse(
+          'https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$apiKey',
+        );
+
+        final response = await http.post(
+          url,
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'system_instruction': {
+              'parts': [
+                {
+                  'text': '''
 You are Siri, a helpful AI voice assistant.
 Rules:
 - Answer naturally and concisely.
@@ -550,28 +558,33 @@ Rules:
 - Reply in the same language the user uses.
 - Be friendly and helpful.
 '''
-            }
-          ]
-        },
-        'contents': [
-          {
-            'parts': [
-              {'text': prompt}
+                }
+              ]
+            },
+            'contents': [
+              {
+                'parts': [
+                  {'text': prompt}
+                ]
+              }
             ]
-          }
-        ]
-      }),
-    );
+          }),
+        );
 
-    if (response.statusCode == 200) {
-      final data = jsonDecode(response.body);
-      final text =
-          data['candidates']?[0]?['content']?['parts']?[0]?['text'] as String?;
-      return text ?? 'No response generated.';
-    } else {
-      final errorData = jsonDecode(response.body);
-      final msg = errorData['error']?['message'] ?? 'API Error';
-      throw Exception('($msg)');
+        if (response.statusCode == 200) {
+          final data = jsonDecode(response.body);
+          final text = data['candidates']?[0]?['content']?['parts']?[0]
+              ?['text'] as String?;
+          return text ?? 'No response generated.';
+        } else {
+          final errorData = jsonDecode(response.body);
+          lastError = errorData['error']?['message'] ?? 'API Error';
+        }
+      } catch (e) {
+        lastError = e.toString();
+      }
     }
+
+    throw Exception(lastError);
   }
 }
