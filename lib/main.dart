@@ -513,78 +513,84 @@ class ChatMessage {
 }
 
 // ============================================================
-// GEMINI HTTP REST API SERVICE WITH FALLBACKS
+// DYNAMIC GEMINI API SERVICE WITH AUTO MODEL DETECTION
 // ============================================================
 
 class GeminiApiService {
   final String apiKey;
+  String? _activeModel;
 
   GeminiApiService({
     required this.apiKey,
   });
+
+  Future<String> _getWorkingModel() async {
+    if (_activeModel != null) return _activeModel!;
+
+    try {
+      final listUrl = Uri.parse(
+        'https://generativelanguage.googleapis.com/v1beta/models?key=$apiKey',
+      );
+      final response = await http.get(listUrl);
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final List models = data['models'] ?? [];
+
+        final availableModels = models
+            .where((m) {
+              final methods = List<String>.from(m['supportedGenerationMethods'] ?? []);
+              return methods.contains('generateContent');
+            })
+            .map((m) => (m['name'] as String).replaceAll('models/', ''))
+            .toList();
+
+        if (availableModels.isNotEmpty) {
+          _activeModel = availableModels.firstWhere(
+            (m) => m.contains('flash'),
+            orElse: () => availableModels.first,
+          );
+          return _activeModel!;
+        }
+      }
+    } catch (_) {}
+
+    _activeModel = 'gemini-1.5-flash-latest';
+    return _activeModel!;
+  }
 
   Future<String> sendMessage(String prompt) async {
     if (apiKey.isEmpty) {
       throw Exception('Gemini API key missing.');
     }
 
-    final models = [
-      'gemini-2.5-flash',
-      'gemini-2.0-flash',
-      'gemini-1.5-flash',
-      'gemini-1.5-pro',
-    ];
+    final model = await _getWorkingModel();
+    final url = Uri.parse(
+      'https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$apiKey',
+    );
 
-    String lastError = '';
-
-    for (final model in models) {
-      try {
-        final url = Uri.parse(
-          'https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$apiKey',
-        );
-
-        final response = await http.post(
-          url,
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode({
-            'system_instruction': {
-              'parts': [
-                {
-                  'text': '''
-You are Siri, a helpful AI voice assistant.
-Rules:
-- Answer naturally and concisely.
-- Understand Hindi, English, and Hinglish.
-- Reply in the same language the user uses.
-- Be friendly and helpful.
-'''
-                }
-              ]
-            },
-            'contents': [
-              {
-                'parts': [
-                  {'text': prompt}
-                ]
-              }
+    final response = await http.post(
+      url,
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'contents': [
+          {
+            'parts': [
+              {'text': prompt}
             ]
-          }),
-        );
+          }
+        ]
+      }),
+    );
 
-        if (response.statusCode == 200) {
-          final data = jsonDecode(response.body);
-          final text = data['candidates']?[0]?['content']?['parts']?[0]
-              ?['text'] as String?;
-          return text ?? 'No response generated.';
-        } else {
-          final errorData = jsonDecode(response.body);
-          lastError = errorData['error']?['message'] ?? 'API Error';
-        }
-      } catch (e) {
-        lastError = e.toString();
-      }
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body);
+      final text = data['candidates']?[0]?['content']?['parts']?[0]?['text'] as String?;
+      return text ?? 'No response generated.';
+    } else {
+      final errorData = jsonDecode(response.body);
+      final msg = errorData['error']?['message'] ?? 'API Error';
+      throw Exception('($msg)');
     }
-
-    throw Exception(lastError);
   }
 }
